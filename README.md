@@ -45,6 +45,14 @@ Development has primarily been tested on:
 - KDE Plasma Desktop Edition
 - KDE Plasma 6
 
+## First install
+- For the first install you can just use
+```bash
+git clone https://github.com/MatejStebel/plasma-widgets.git
+cd plasma-widgets/bakalari-widget
+./install.sh
+```
+
 ## Building on Fedora Linux
 
 Install the required development packages:
