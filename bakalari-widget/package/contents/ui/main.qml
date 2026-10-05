@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import org.kde.plasma.plasmoid
 import org.kde.plasma.components as PlasmaComponents
 import "../code/timetableParser.js" as TimetableParser
+import "BakalariWallet" as BakalariWallet
 
 
 PlasmoidItem {
@@ -11,14 +12,9 @@ PlasmoidItem {
 
     preferredRepresentation: fullRepresentation
 
-    property string cycle:
-        TimetableData.timetable.cycle || ""
-
-    property var lessonTimes:
-        TimetableData.timetable.hours || []
-
-    property var days:
-        TimetableData.timetable.days || []
+    property string cycle: ""
+    property var lessonTimes: []
+    property var days: []
 
     property string loadError: ""
 
@@ -26,6 +22,25 @@ PlasmoidItem {
     property string accessToken: ""
     property string apiStatus: ""
     property bool apiBusy: false
+    property var lastApiData: null
+    property string teacherOverridesJson:
+        plasmoid.configuration.teacherOverrides || "{}"
+
+    onTeacherOverridesJsonChanged: {
+        if (root.lastApiData !== null) {
+            root.applyTimetableData(
+                root.lastApiData
+            )
+        }
+    }
+    BakalariWallet.WalletBackend {
+        id: walletBackend
+    }
+    Component.onCompleted: {
+        Qt.callLater(function() {
+            root.tryAutomaticLogin()
+        })
+    }
     function normalizedServerUrl() {
         var url = plasmoid.configuration.serverUrl.trim()
 
@@ -34,6 +49,162 @@ PlasmoidItem {
         }
 
         return url
+    }
+    function walletKey() {
+        var server =
+            root.normalizedServerUrl()
+
+        var username =
+            plasmoid.configuration.username.trim()
+
+        if (
+            server === ""
+            || username === ""
+        ) {
+            return ""
+        }
+
+        return server + "|" + username
+    }
+
+
+    function savePasswordToWallet(password) {
+        var key = root.walletKey()
+
+        if (
+            key === ""
+            || password === ""
+        ) {
+            return
+        }
+
+        var success =
+            walletBackend.savePassword(
+                key,
+                password
+            )
+
+        if (!success) {
+            console.error(
+                "Could not save password to KWallet"
+            )
+        }
+    }
+
+
+    function tryAutomaticLogin() {
+        var key = root.walletKey()
+
+        if (key === "") {
+            return
+        }
+
+        var password =
+            walletBackend.loadPassword(key)
+
+        if (
+            password === undefined
+            || password === null
+            || password === ""
+        ) {
+            return
+        }
+
+        root.sessionPassword =
+            password
+
+        root.loginToBakalari()
+    }
+    function loadTeacherOverrides() {
+        try {
+            var overrides = JSON.parse(
+                plasmoid.configuration.teacherOverrides
+                || "{}"
+            )
+
+            if (
+                overrides === null
+                || Array.isArray(overrides)
+                || typeof overrides !== "object"
+            ) {
+                return {}
+            }
+
+            return overrides
+
+        } catch (error) {
+            console.error(
+                "Invalid teacher overrides:",
+                error
+            )
+
+            return {}
+        }
+    }
+    Timer {
+        id: refreshTimer
+
+        interval:
+            Math.max(
+                1,
+                plasmoid.configuration.refreshInterval
+            )
+            * 60
+            * 1000
+
+        repeat: true
+        running:
+            root.accessToken !== ""
+
+        onTriggered: {
+            root.fetchTimetable()
+        }
+    }
+    Connections {
+        target:
+            plasmoid.configuration
+
+        function onRefreshIntervalChanged() {
+            refreshTimer.restart()
+        }
+    }
+
+
+    function applyTimetableData(data) {
+        root.lastApiData = data
+
+        // Save a lightweight teacher list
+        // for the settings page.
+        var teachers =
+            TimetableParser.buildTeacherList(
+                data.Teachers || []
+            )
+
+        var teacherJson =
+            JSON.stringify(teachers)
+
+        if (
+            plasmoid.configuration.teacherList
+            !== teacherJson
+        ) {
+            plasmoid.configuration.teacherList =
+                teacherJson
+        }
+
+        var parsed =
+            TimetableParser.parseTimetable(
+                data,
+                root.loadTeacherOverrides()
+            )
+
+        root.cycle =
+            parsed.cycle
+
+        root.lessonTimes =
+            parsed.hours
+
+        root.days =
+            parsed.days
     }
 
 
@@ -72,14 +243,17 @@ PlasmoidItem {
         )
 
         request.onreadystatechange = function() {
-            if (request.readyState !== XMLHttpRequest.DONE) {
+            if (
+                request.readyState
+                !== XMLHttpRequest.DONE
+            ) {
                 return
             }
 
-            apiBusy = false
+            root.apiBusy = false
 
             if (request.status !== 200) {
-                apiStatus =
+                root.apiStatus =
                     "Login failed (HTTP "
                     + request.status
                     + ")"
@@ -92,35 +266,51 @@ PlasmoidItem {
                 return
             }
 
+            var response
+
             try {
-                var response = JSON.parse(
+                response = JSON.parse(
                     request.responseText
                 )
-
-                if (!response.access_token) {
-                    apiStatus = "Login response has no access token"
-                    return
-                }
-
-                accessToken =
-                    response.access_token
-
-                apiStatus =
-                    "Logged in"
-
-                fetchTimetable()
-
             } catch (error) {
-                apiStatus =
+                root.apiStatus =
                     "Invalid login response"
 
                 console.error(
                     "Could not parse login response:",
                     error
                 )
-            }
-        }
 
+                return
+            }
+
+            if (
+                !response.access_token
+                || response.access_token === ""
+            ) {
+                root.apiStatus =
+                    "Login response has no access token"
+
+                return
+            }
+
+            root.accessToken =
+            response.access_token
+
+            root.apiStatus =
+                "Logged in"
+
+            // Save it BEFORE clearing sessionPassword.
+            root.savePasswordToWallet(
+                root.sessionPassword
+            )
+
+            refreshTimer.restart()
+
+            root.sessionPassword = ""
+
+            root.fetchTimetable()
+        }
         var body =
             "client_id=ANDR"
             + "&grant_type=password"
@@ -149,6 +339,7 @@ PlasmoidItem {
 
 
     function fetchTimetable() {
+        console.log("fetchTimetable called")
         if (root.accessToken === "") {
             root.apiStatus = "Not logged in"
             return
@@ -203,40 +394,26 @@ PlasmoidItem {
                     request.responseText
                 )
 
-                var parsed =
-                    TimetableParser.parseTimetable(
-                        data
-                    )
-
-                root.cycle =
-                    parsed.cycle
-
-                root.lessonTimes =
-                    parsed.hours
-
-                root.days =
-                    parsed.days
-
-                root.apiStatus =
-                    "Timetable updated"
-
-                console.log(
-                    "Live timetable:",
-                    parsed.days.length,
-                    "days,",
-                    parsed.hours.length,
-                    "hours"
-                )
+                root.applyTimetableData(data)
 
             } catch (error) {
                 root.apiStatus =
-                    "Invalid timetable response"
+                    "Could not process timetable"
 
                 console.error(
-                    "Could not parse timetable:",
+                    "Timetable processing error:",
                     error
                 )
+
+                return
             }
+
+            root.apiStatus =
+                "Timetable updated at "
+                + Qt.formatTime(
+                    new Date(),
+                    "HH:mm"
+                )
         }
 
         request.send()
@@ -357,7 +534,6 @@ PlasmoidItem {
                     timetableColumn.implicitHeight
                 )
 
-
                 ColumnLayout {
                     id: timetableColumn
                     anchors.fill: parent
@@ -389,6 +565,9 @@ PlasmoidItem {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 320
 
+                        visible:
+                            root.accessToken === ""
+
                         spacing: 8
 
                         TextField {
@@ -396,6 +575,9 @@ PlasmoidItem {
 
                             Layout.fillWidth: true
                             Layout.minimumWidth: 220
+
+                            text:
+                                root.sessionPassword
 
                             placeholderText:
                                 i18n("Bakaláři password")
@@ -406,7 +588,7 @@ PlasmoidItem {
                             enabled:
                                 !root.apiBusy
 
-                            onTextChanged:
+                            onTextEdited:
                                 root.sessionPassword = text
 
                             onAccepted:
@@ -426,6 +608,29 @@ PlasmoidItem {
                                 root.loginToBakalari()
                         }
                     }
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        visible:
+                            root.accessToken !== ""
+
+                        Item {
+                            Layout.fillWidth: true
+                        }
+
+                        Button {
+                            text:
+                                root.apiBusy
+                                ? i18n("Loading...")
+                                : i18n("Refresh")
+
+                            enabled:
+                                !root.apiBusy
+
+                            onClicked:
+                                root.fetchTimetable()
+                        }
+                    }
                     PlasmaComponents.Label {
                         Layout.fillWidth: true
 
@@ -441,7 +646,21 @@ PlasmoidItem {
                         opacity: 0.8
                     }
 
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
 
+                        visible:
+                            root.days.length === 0
+                            && root.accessToken === ""
+
+                        text:
+                            i18n("Enter your password to load the timetable")
+
+                        horizontalAlignment:
+                            Text.AlignHCenter
+
+                        opacity: 0.8
+                    }
                     // -------------------------
                     // Hour header
                     // -------------------------

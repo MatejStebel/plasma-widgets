@@ -15,6 +15,9 @@ kpackagetool6 \
     --remove cz.saruman.bakalari \
     2>/dev/null || true
 
+cp build/libbakalarwalletplugin.so \
+    package/contents/ui/BakalariWallet/
+
 kpackagetool6 \
     --type Plasma/Applet \
     --install package

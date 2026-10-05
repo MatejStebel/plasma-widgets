@@ -31,6 +31,19 @@
         >
             <default>15</default>
         </entry>
+        <entry
+            name="teacherList"
+            type="String"
+        >
+            <default>[]</default>
+        </entry>
+
+        <entry
+            name="teacherOverrides"
+            type="String"
+        >
+            <default>{}</default>
+        </entry>
 
     </group>
 </kcfg>

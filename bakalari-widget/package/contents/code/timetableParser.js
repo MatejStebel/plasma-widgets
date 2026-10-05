@@ -69,7 +69,7 @@ function getSurname(fullName) {
 }
 
 
-function teacherAbbreviation(teacher) {
+function automaticTeacherAbbreviation(teacher) {
     if (!teacher) {
         return ""
     }
@@ -83,6 +83,76 @@ function teacherAbbreviation(teacher) {
     }
 
     return surname.substring(0, 4)
+}
+
+
+function teacherAbbreviation(
+    teacher,
+    overrides
+) {
+    if (!teacher) {
+        return ""
+    }
+
+    var teacherId =
+        String(teacher.Id)
+
+    if (
+        overrides
+        && overrides[teacherId] !== undefined
+        && overrides[teacherId] !== null
+    ) {
+        var custom =
+            String(
+                overrides[teacherId]
+            ).trim()
+
+        if (custom !== "") {
+            return custom
+        }
+    }
+
+    return automaticTeacherAbbreviation(
+        teacher
+    )
+}
+
+
+function buildTeacherList(rawTeachers) {
+    var result = []
+
+    if (!rawTeachers) {
+        return result
+    }
+
+    for (
+        var i = 0;
+        i < rawTeachers.length;
+        i++
+    ) {
+        var teacher =
+            rawTeachers[i]
+
+        result.push({
+            id: String(teacher.Id),
+
+            name:
+                teacher.Name || "",
+
+            automaticAbbreviation:
+                automaticTeacherAbbreviation(
+                    teacher
+                )
+        })
+    }
+
+    result.sort(function(a, b) {
+        return a.name.localeCompare(
+            b.name
+        )
+    })
+
+    return result
 }
 
 
@@ -520,13 +590,13 @@ function fullDayEventText(day) {
     return "Event"
 }
 
-
 function convertAtom(
     atom,
     allowedHours,
     subjects,
     teachers,
-    rooms
+    rooms,
+    teacherOverrides
 ) {
     var hourId =
         String(atom.HourId)
@@ -567,7 +637,8 @@ function convertAtom(
             teacherAbbreviation(
                 teachers[
                     String(atom.TeacherId)
-                ]
+                ],
+                teacherOverrides
             )
     }
 
@@ -621,7 +692,13 @@ function convertAtom(
 }
 
 
-function parseTimetable(data) {
+function parseTimetable(
+    data,
+    teacherOverrides
+) {
+    teacherOverrides =
+        teacherOverrides || {}
+
     var possibleHours =
         convertHours(
             data.Hours || []
@@ -721,7 +798,8 @@ function parseTimetable(data) {
                         allowedHours,
                         subjects,
                         teachers,
-                        rooms
+                        rooms,
+                        teacherOverrides
                     )
 
                 if (lesson !== null) {
