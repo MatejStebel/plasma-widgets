@@ -3,8 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import org.kde.plasma.plasmoid
 import org.kde.plasma.components as PlasmaComponents
+import "../code/timetableParser.js" as TimetableParser
 
-import "../data/timetable.js" as TimetableData
 
 PlasmoidItem {
     id: root
@@ -12,15 +12,235 @@ PlasmoidItem {
     preferredRepresentation: fullRepresentation
 
     property string cycle:
-	TimetableData.timetable.cycle || ""
+        TimetableData.timetable.cycle || ""
 
     property var lessonTimes:
-    	TimetableData.timetable.hours || []
+        TimetableData.timetable.hours || []
 
     property var days:
-    	TimetableData.timetable.days || []
+        TimetableData.timetable.days || []
 
     property string loadError: ""
+
+    property string sessionPassword: ""
+    property string accessToken: ""
+    property string apiStatus: ""
+    property bool apiBusy: false
+    function normalizedServerUrl() {
+        var url = plasmoid.configuration.serverUrl.trim()
+
+        while (url.endsWith("/")) {
+            url = url.slice(0, -1)
+        }
+
+        return url
+    }
+
+
+    function loginToBakalari() {
+        var server = normalizedServerUrl()
+        var username = plasmoid.configuration.username.trim()
+
+        if (server === "") {
+            apiStatus = "Server URL is missing"
+            return
+        }
+
+        if (username === "") {
+            apiStatus = "Username is missing"
+            return
+        }
+
+        if (sessionPassword === "") {
+            apiStatus = "Password is missing"
+            return
+        }
+
+        apiBusy = true
+        apiStatus = "Logging in..."
+
+        var request = new XMLHttpRequest()
+
+        request.open(
+            "POST",
+            server + "/api/login"
+        )
+
+        request.setRequestHeader(
+            "Content-Type",
+            "application/x-www-form-urlencoded"
+        )
+
+        request.onreadystatechange = function() {
+            if (request.readyState !== XMLHttpRequest.DONE) {
+                return
+            }
+
+            apiBusy = false
+
+            if (request.status !== 200) {
+                apiStatus =
+                    "Login failed (HTTP "
+                    + request.status
+                    + ")"
+
+                console.error(
+                    "Bakaláři login failed:",
+                    request.responseText
+                )
+
+                return
+            }
+
+            try {
+                var response = JSON.parse(
+                    request.responseText
+                )
+
+                if (!response.access_token) {
+                    apiStatus = "Login response has no access token"
+                    return
+                }
+
+                accessToken =
+                    response.access_token
+
+                apiStatus =
+                    "Logged in"
+
+                fetchTimetable()
+
+            } catch (error) {
+                apiStatus =
+                    "Invalid login response"
+
+                console.error(
+                    "Could not parse login response:",
+                    error
+                )
+            }
+        }
+
+        var body =
+            "client_id=ANDR"
+            + "&grant_type=password"
+            + "&username="
+            + encodeURIComponent(username)
+            + "&password="
+            + encodeURIComponent(sessionPassword)
+
+        request.send(body)
+    }
+    function todayForApi() {
+        var date = new Date()
+
+        var year = date.getFullYear()
+
+        var month =
+            String(date.getMonth() + 1)
+            .padStart(2, "0")
+
+        var day =
+            String(date.getDate())
+            .padStart(2, "0")
+
+        return year + "-" + month + "-" + day
+    }
+
+
+    function fetchTimetable() {
+        if (root.accessToken === "") {
+            root.apiStatus = "Not logged in"
+            return
+        }
+
+        root.apiBusy = true
+        root.apiStatus = "Loading timetable..."
+
+        var request = new XMLHttpRequest()
+
+        var url =
+            root.normalizedServerUrl()
+            + "/api/3/timetable/actual?date="
+            + root.todayForApi()
+
+        request.open(
+            "GET",
+            url
+        )
+
+        request.setRequestHeader(
+            "Authorization",
+            "Bearer " + root.accessToken
+        )
+
+        request.onreadystatechange = function() {
+            if (
+                request.readyState
+                !== XMLHttpRequest.DONE
+            ) {
+                return
+            }
+
+            root.apiBusy = false
+
+            if (request.status !== 200) {
+                root.apiStatus =
+                    "Timetable failed (HTTP "
+                    + request.status
+                    + ")"
+
+                console.error(
+                    "Timetable request failed:",
+                    request.responseText
+                )
+
+                return
+            }
+
+            try {
+                var data = JSON.parse(
+                    request.responseText
+                )
+
+                var parsed =
+                    TimetableParser.parseTimetable(
+                        data
+                    )
+
+                root.cycle =
+                    parsed.cycle
+
+                root.lessonTimes =
+                    parsed.hours
+
+                root.days =
+                    parsed.days
+
+                root.apiStatus =
+                    "Timetable updated"
+
+                console.log(
+                    "Live timetable:",
+                    parsed.days.length,
+                    "days,",
+                    parsed.hours.length,
+                    "hours"
+                )
+
+            } catch (error) {
+                root.apiStatus =
+                    "Invalid timetable response"
+
+                console.error(
+                    "Could not parse timetable:",
+                    error
+                )
+            }
+        }
+
+        request.send()
+    }
 
     function lessonForHour(day, hourId) {
         if (!day || !day.lessons) {
@@ -81,6 +301,8 @@ PlasmoidItem {
         implicitWidth: 900
         implicitHeight: 500
 
+        Layout.minimumWidth: 360
+
         property int dayWidth: 90
         property int lessonWidth: 110
         property int headerHeight: 55
@@ -132,17 +354,12 @@ PlasmoidItem {
 
                 height: Math.max(
                     timetableScroll.height,
-
-                    40
-                    + representation.headerHeight
-                    + root.days.length
-                    * representation.lessonHeight
-                    + root.days.length
-                    * representation.cellSpacing
+                    timetableColumn.implicitHeight
                 )
 
 
                 ColumnLayout {
+                    id: timetableColumn
                     anchors.fill: parent
 
                     spacing:
@@ -154,9 +371,10 @@ PlasmoidItem {
                         Layout.preferredHeight: 40
 
                         text:
-                            root.loadError !== ""
-                            ? root.loadError
-                            : "Weekly schedule"
+                            plasmoid.configuration.username !== ""
+                            ? "Weekly schedule — "
+                                + plasmoid.configuration.username
+                            : "Weekly schedule — not configured"
 
                         horizontalAlignment:
                             Text.AlignHCenter
@@ -166,6 +384,61 @@ PlasmoidItem {
 
                         font.pixelSize: 20
                         font.bold: true
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 320
+
+                        spacing: 8
+
+                        TextField {
+                            id: passwordField
+
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 220
+
+                            placeholderText:
+                                i18n("Bakaláři password")
+
+                            echoMode:
+                                TextInput.Password
+
+                            enabled:
+                                !root.apiBusy
+
+                            onTextChanged:
+                                root.sessionPassword = text
+
+                            onAccepted:
+                                root.loginToBakalari()
+                        }
+
+                        Button {
+                            text:
+                                root.apiBusy
+                                ? i18n("Loading...")
+                                : i18n("Login")
+
+                            enabled:
+                                !root.apiBusy
+
+                            onClicked:
+                                root.loginToBakalari()
+                        }
+                    }
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
+
+                        visible:
+                            root.apiStatus !== ""
+
+                        text:
+                            root.apiStatus
+
+                        horizontalAlignment:
+                            Text.AlignHCenter
+
+                        opacity: 0.8
                     }
 
 
