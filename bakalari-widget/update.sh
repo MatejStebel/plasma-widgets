@@ -4,26 +4,39 @@ set -e
 
 cd "$(dirname "$0")"
 
-echo "Updating Bakaláři widget..."
+CONTAINER="bakalari-dev"
+PLASMOID_ID="cz.saruman.bakalari"
 
-mkdir -p package/contents/data
-cp parsed_timetable.json package/contents/data/timetable.json
-cp parsed_timetable.js package/contents/data/timetable.js
+echo "Building Bakaláři widget..."
 
-kpackagetool6 \
-    --type Plasma/Applet \
-    --remove cz.saruman.bakalari \
-    2>/dev/null || true
+toolbox run \
+    --container "$CONTAINER" \
+    cmake \
+        -S . \
+        -B build \
+        -DCMAKE_BUILD_TYPE=Release
 
-cp build/libbakalarwalletplugin.so \
-    package/contents/ui/BakalariWallet/
+toolbox run \
+    --container "$CONTAINER" \
+    cmake \
+        --build build
 
-kpackagetool6 \
-    --type Plasma/Applet \
-    --install package
+echo "Removing old installed widget files..."
+
+rm -rf \
+    "$HOME/.local/share/plasma/plasmoids/$PLASMOID_ID"
+
+echo "Installing widget..."
+
+toolbox run \
+    --container "$CONTAINER" \
+    cmake \
+        --install build \
+        --prefix "$HOME/.local"
 
 echo "Restarting Plasma..."
 
-systemctl --user restart plasma-plasmashell.service
+systemctl --user restart \
+    plasma-plasmashell.service
 
 echo "Done."

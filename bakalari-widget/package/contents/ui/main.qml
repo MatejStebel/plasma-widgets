@@ -25,6 +25,19 @@ PlasmoidItem {
     property var lastApiData: null
     property string teacherOverridesJson:
         plasmoid.configuration.teacherOverrides || "{}"
+    property bool logoutRequested:
+        plasmoid.configuration.logoutRequested
+
+    onLogoutRequestedChanged: {
+        if (!root.logoutRequested) {
+            return
+        }
+
+        root.forgetPasswordAndLogout()
+
+        // Reset the one-shot request.
+        plasmoid.configuration.logoutRequested = false
+    }
 
     onTeacherOverridesJsonChanged: {
         if (root.lastApiData !== null) {
@@ -90,7 +103,36 @@ PlasmoidItem {
             )
         }
     }
+    function forgetPasswordAndLogout() {
+        var key =
+            root.walletKey()
 
+        if (key !== "") {
+            var removed =
+                walletBackend.deletePassword(
+                    key
+                )
+
+            if (!removed) {
+                console.error(
+                    "Could not remove password from KWallet"
+                )
+            }
+        }
+
+        refreshTimer.stop()
+
+        root.accessToken = ""
+        root.sessionPassword = ""
+        root.lastApiData = null
+
+        root.cycle = ""
+        root.lessonTimes = []
+        root.days = []
+
+        root.apiBusy = false
+        root.apiStatus = "Logged out"
+    }
 
     function tryAutomaticLogin() {
         var key = root.walletKey()
@@ -207,7 +249,96 @@ PlasmoidItem {
             parsed.days
     }
 
+    property date currentTime: new Date()
 
+    Timer {
+        interval: 30000
+        repeat: true
+        running: true
+
+        onTriggered: {
+            root.currentTime = new Date()
+        }
+    }
+    function isCurrentHour(hour) {
+        if (!hour || !hour.start || !hour.end) {
+            return false
+        }
+
+        var now = root.currentTime
+
+        var startParts =
+            hour.start.split(":")
+
+        var endParts =
+            hour.end.split(":")
+
+        if (
+            startParts.length < 2
+            || endParts.length < 2
+        ) {
+            return false
+        }
+
+        var nowMinutes =
+            now.getHours() * 60
+            + now.getMinutes()
+
+        var startMinutes =
+            parseInt(startParts[0]) * 60
+            + parseInt(startParts[1])
+
+        var endMinutes =
+            parseInt(endParts[0]) * 60
+            + parseInt(endParts[1])
+
+        return (
+            nowMinutes >= startMinutes
+            && nowMinutes < endMinutes
+        )
+    }
+
+    function isToday(day) {
+        if (!day) {
+            return false
+        }
+
+        var now = root.currentTime
+
+        var year =
+            now.getFullYear()
+
+        var month =
+            String(now.getMonth() + 1)
+            .padStart(2, "0")
+
+        var date =
+            String(now.getDate())
+            .padStart(2, "0")
+
+        var today =
+            year
+            + "-"
+            + month
+            + "-"
+            + date
+
+        var dayDate =
+            String(day.date || "")
+
+        // Works for both:
+        // 2026-10-05
+        // 2026-10-05T00:00:00+02:00
+        if (
+            dayDate.substring(0, 10)
+            === today
+        ) {
+            return true
+        }
+
+        return false
+    }
+    
     function loginToBakalari() {
         var server = normalizedServerUrl()
         var username = plasmoid.configuration.username.trim()
@@ -675,8 +806,7 @@ PlasmoidItem {
                             representation.cellSpacing
 
 
-                        // Top-left corner:
-                        // current Bakaláři cycle
+                        // Top-left corner
                         PlasmaComponents.Label {
                             Layout.minimumWidth:
                                 representation.dayWidth
@@ -686,7 +816,8 @@ PlasmoidItem {
 
                             Layout.fillHeight: true
 
-                            text: root.cycle
+                            text:
+                                root.cycle
 
                             horizontalAlignment:
                                 Text.AlignHCenter
@@ -700,9 +831,10 @@ PlasmoidItem {
 
 
                         Repeater {
-                            model: root.lessonTimes
+                            model:
+                                root.lessonTimes
 
-                            delegate: ColumnLayout {
+                            delegate: Rectangle {
                                 required property var modelData
 
                                 Layout.fillWidth: true
@@ -713,42 +845,66 @@ PlasmoidItem {
                                 Layout.preferredWidth:
                                     representation.lessonWidth
 
-                                spacing: 0
+                                Layout.fillHeight: true
+
+                                radius: 6
+
+                                color:
+                                    root.isCurrentHour(modelData)
+                                    ? Qt.rgba(
+                                        0.7,
+                                        0.7,
+                                        0.7,
+                                        0.25
+                                    )
+                                    : "transparent"
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+
+                                    anchors.margins: 2
+
+                                    spacing: 0
 
 
-                                PlasmaComponents.Label {
-                                    Layout.fillWidth: true
+                                    PlasmaComponents.Label {
+                                        Layout.fillWidth: true
 
-                                    // Uses Hours[].Caption,
-                                    // not Hours[].Id.
-                                    text: modelData.number
+                                        text:
+                                            modelData.number
 
-                                    horizontalAlignment:
-                                        Text.AlignHCenter
+                                        horizontalAlignment:
+                                            Text.AlignHCenter
 
-                                    font.bold: true
-                                    font.pixelSize: 16
-                                }
+                                        verticalAlignment:
+                                            Text.AlignVCenter
+
+                                        font.bold: true
+                                        font.pixelSize: 16
+                                    }
 
 
-                                PlasmaComponents.Label {
-                                    Layout.fillWidth: true
+                                    PlasmaComponents.Label {
+                                        Layout.fillWidth: true
 
-                                    text:
-                                        modelData.start
-                                        + "–"
-                                        + modelData.end
+                                        text:
+                                            modelData.start
+                                            + "–"
+                                            + modelData.end
 
-                                    horizontalAlignment:
-                                        Text.AlignHCenter
+                                        horizontalAlignment:
+                                            Text.AlignHCenter
 
-                                    font.pixelSize: 11
-                                    opacity: 0.7
+                                        verticalAlignment:
+                                            Text.AlignVCenter
+
+                                        font.pixelSize: 11
+                                        opacity: 0.7
+                                    }
                                 }
                             }
                         }
                     }
-
 
                     // -------------------------
                     // Days
@@ -778,7 +934,7 @@ PlasmoidItem {
                                 representation.cellSpacing
 
 
-                            PlasmaComponents.Label {
+                            Rectangle {
                                 Layout.minimumWidth:
                                     representation.dayWidth
 
@@ -787,18 +943,34 @@ PlasmoidItem {
 
                                 Layout.fillHeight: true
 
-                                text:
-                                    root.dayName(
-                                        dayRow.dayData.dayOfWeek
+                                radius: 6
+
+                                color:
+                                    root.isToday(dayRow.dayData)
+                                    ? Qt.rgba(
+                                        0.7,
+                                        0.7,
+                                        0.7,
+                                        0.25
                                     )
+                                    : "transparent"
 
-                                horizontalAlignment:
-                                    Text.AlignHCenter
+                                PlasmaComponents.Label {
+                                    anchors.fill: parent
 
-                                verticalAlignment:
-                                    Text.AlignVCenter
+                                    text:
+                                        root.dayName(
+                                            dayRow.dayData.dayOfWeek
+                                        )
 
-                                font.bold: true
+                                    horizontalAlignment:
+                                        Text.AlignHCenter
+
+                                    verticalAlignment:
+                                        Text.AlignVCenter
+
+                                    font.bold: true
+                                }
                             }
 
                             Rectangle {
